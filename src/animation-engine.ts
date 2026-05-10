@@ -30,6 +30,7 @@ export const DETECT_AND_FREEZE_SCRIPT = `(function() {
     wow:            !!(window.WOW || document.querySelector('.wow')),
     animateCss:     !!document.querySelector('[class*="animate__"]'),
     lottie:         !!(window.lottie || window.bodymovin || document.querySelector('lottie-player')),
+    dotlottie:      !!(window.DotLottiePlayer || document.querySelector('dotlottie-player') || document.querySelector('[src*=".lottie"]')),
     motionOne:      !!(window.Motion || window.motion),
     animeJs:        !!(window.anime),
     splitting:      !!(window.Splitting || document.querySelector('[data-splitting]')),
@@ -38,6 +39,7 @@ export const DETECT_AND_FREEZE_SCRIPT = `(function() {
     particles:      !!(window.particlesJS || window.tsParticles || document.querySelector('[id*="particles"]')),
     three:          !!(window.THREE),
     svelte:         !!document.querySelector('[class*="svelte-"]'),
+    tailwindAnims:  !!(document.querySelector('[class*="opacity-0"]') || document.querySelector('[class*="translate-y-"]') || document.querySelector('.hero-reveal')),
   };
 
   // ── 2. GSAP: Fast-forward all timelines + tag animated elements ──────────
@@ -320,26 +322,87 @@ export const DETECT_AND_FREEZE_SCRIPT = `(function() {
     el.setAttribute('style', style.replace(/visibility\s*:\s*hidden\s*;?/gi, ''));
   });
 
-  // ── 14. Tailwind hidden classes: add visible counterpart ─────────────────
-  var twHidden = ['.opacity-0', '.invisible'];
-  twHidden.forEach(function(sel) {
+  // ── 14. Tailwind animation entry-state class stripping ───────────────────
+  // Removes class-based entry states (opacity-0, translate-y-12, blur-[4px],
+  // scale-x-0, scale-y-0) from elements that have CSS transitions.
+  // These are used by antimetal.com and Tailwind-based sites where JS removes
+  // the classes on scroll-in. The scraper captures before JS fires.
+  (function() {
+    var STRIP_CLASSES = ['opacity-0', 'invisible', 'scale-x-0', 'scale-y-0', 'scale-0',
+                         'scale-50', 'scale-75', 'scale-95'];
+    var STRIP_PATTERNS = [
+      /\btranslate-y-\d+\b/g,
+      /\b-translate-y-\d+\b/g,
+      /\btranslate-x-\d+\b/g,
+      /\b-translate-x-\d+\b/g,
+      /\bblur-\[[\d.]+(?:px|rem)\]\b/g,
+      /\bblur-(?:sm|md|lg|xl|2xl|3xl)\b/g,
+      /\bscale-\[[\d.]+\]\b/g,
+    ];
+
+    // Query elements that have Tailwind animation-entry classes
+    var candidates;
     try {
-      document.querySelectorAll(sel).forEach(function(el) {
-        if (isHoverOnlyEl(el)) return;
-        var cls = (typeof el.className === 'string' ? el.className : '') || '';
-        if (/group-hover:|peer-hover:|hover:|focus:/.test(cls)) return;
-        var cs = window.getComputedStyle(el);
-        if (cs.display === 'none') return;
-        if (cs.transition && cs.transition !== 'all 0s ease 0s') {
-          el.style.opacity = '1';
-          el.style.visibility = 'visible';
-          if (cs.transform && cs.transform !== 'none' && cs.transform !== 'matrix(1, 0, 0, 1, 0, 0)') {
-            el.style.transform = 'none';
-          }
+      candidates = document.querySelectorAll(
+        '[class*="opacity-0"],[class*="scale-x-0"],[class*="scale-y-0"],' +
+        '[class*="translate-y-"],[class*="translate-x-"],[class*="blur-["],' +
+        '.hero-reveal,.invisible'
+      );
+    } catch(e) { return; }
+
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (isHoverOnlyEl(el)) continue;
+
+      var cls = (typeof el.className === 'string') ? el.className : '';
+      if (!cls) continue;
+
+      // Skip hover/focus/group-only utilities
+      if (/\b(?:group-hover|peer-hover|hover|focus|focus-within|focus-visible):/.test(cls)) continue;
+
+      // Skip dropdown, menu, tooltip, dialog overlays
+      try {
+        if (el.closest('[role="dialog"],[role="menu"],[role="tooltip"],[role="listbox"]')) continue;
+        if (el.closest('[data-radix-popper-content-wrapper],[data-headlessui-state]')) continue;
+        if (el.closest('[data-state="closed"]')) continue;
+      } catch(e) {}
+
+      var cs = window.getComputedStyle(el);
+      if (cs.display === 'none') continue;
+
+      // Only strip from elements with a CSS transition (animated elements)
+      // OR from hero-reveal / delay-* elements (explicit animation markers)
+      var hasTrans = cs.transitionDuration && cs.transitionDuration !== '0s';
+      var isMarked = /\bhero-reveal\b/.test(cls) || /\bdelay-\d+\b/.test(cls) || /\banimate-in\b/.test(cls);
+
+      if (!hasTrans && !isMarked) continue;
+
+      var changed = false;
+      var newCls = cls;
+
+      // Strip named classes
+      for (var j = 0; j < STRIP_CLASSES.length; j++) {
+        if (el.classList.contains(STRIP_CLASSES[j])) {
+          el.classList.remove(STRIP_CLASSES[j]);
+          changed = true;
         }
-      });
-    } catch(e) {}
-  });
+      }
+
+      // Strip pattern-matched classes (translate-y-12, blur-[4px], etc.)
+      for (var k = 0; k < STRIP_PATTERNS.length; k++) {
+        var pat = STRIP_PATTERNS[k];
+        if (pat.test(newCls)) {
+          newCls = newCls.replace(pat, ' ');
+          changed = true;
+        }
+        pat.lastIndex = 0;
+      }
+
+      if (changed) {
+        el.className = newCls.replace(/\s+/g, ' ').trim();
+      }
+    }
+  })();
 
   // ── 15. CSS Houdini @property stub (for browsers without it) ─────────────
   // Track any registered properties so animation-capture.ts can export them

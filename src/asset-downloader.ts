@@ -46,6 +46,50 @@ function is3dAsset(url: string): boolean {
   } catch { return false; }
 }
 
+// ── Analytics / tracker domain blocklist ──────────────────────────────────
+// These domains produce empty junk folders. Never download them.
+
+const TRACKER_DOMAINS = new Set([
+  "google-analytics.com",
+  "googletagmanager.com",
+  "googleads.g.doubleclick.net",
+  "doubleclick.net",
+  "pixel-cdn.default.com",
+  "px.ads.linkedin.com",
+  "www.linkedin.com",
+  "snap.licdn.com",
+  "www.google-analytics.com",
+  "www.google.com",
+  "www.google.co.in",
+  "api.unifyintent.com",
+  "tag.unifyintent.com",
+  "us-assets.i.posthog.com",
+  "b2bjsstore.s3.us-west-2.amazonaws.com",
+  "clarity.ms",
+  "hotjar.com",
+  "segment.io",
+  "mixpanel.com",
+  "facebook.net",
+  "twitter.com",
+  "t.co",
+  "analytics.tiktok.com",
+  "bat.bing.com",
+  "sc-static.net",
+]);
+
+function isTrackerDomain(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    // Exact match
+    if (TRACKER_DOMAINS.has(hostname)) return true;
+    // Subdomain match
+    for (const blocked of TRACKER_DOMAINS) {
+      if (hostname.endsWith('.' + blocked)) return true;
+    }
+    return false;
+  } catch { return false; }
+}
+
 // ── CDN local download directory ─────────────────────────────────────────────
 
 const CDN_LOCAL_DIR = "assets/cdn";
@@ -199,6 +243,8 @@ export async function downloadAllAssets(
   async function downloadOne(assetUrl: string): Promise<void> {
     if (downloaded.has(assetUrl)) return;
     if (assetUrl.startsWith("data:") || assetUrl.startsWith("blob:")) return;
+    // Skip analytics/tracker domains — they produce useless empty junk folders
+    if (isTrackerDomain(assetUrl)) return;
     downloaded.add(assetUrl);
 
     const localRelPath = assetMap.get(assetUrl);

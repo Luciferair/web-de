@@ -248,10 +248,30 @@ html.scraper-theme-transition *::after {
   box-shadow: 0 0 16px ${accentGlow}, 0 0 40px ${accentGlow} !important;
 }
 
-/* ── Custom cursor element (common in portfolios) ────────────────────────── */
+/* ── Custom cursor element (common in portfolios) ────────────────────── */
 [class*="cursor-dot"], [class*="cursor-ring"], #cursor, .cursor {
   pointer-events: none !important;
   transition: transform 0.08s linear !important;
+}
+
+/* ── hero-no-autoplay: Force-show all hero-reveal elements ─────────────── */
+/* This is a built-in site fallback (antimetal.com pattern).               */
+/* Added to <html> by the scraper. Overrides CSS :has() trigger.           */
+html.hero-no-autoplay .hero-reveal {
+  opacity: 1 !important;
+  translate: none !important;
+  scale: none !important;
+  filter: none !important;
+  transition: none !important;
+}
+
+/* ── Tailwind entry-state class overrides (belt-and-suspenders) ──────── */
+/* In case Tailwind class stripping missed any elements during scrape.     */
+/* Only targets elements with transition (animated), not static ones.      */
+[class*="translate-y-"][style*="transition-delay"],
+[class*="translate-x-"][style*="transition-delay"] {
+  translate: none !important;
+  transform: none !important;
 }
 </style>`);
 }
@@ -270,6 +290,51 @@ function buildEnhancementScript(
 
 var ROOT_VARS = ${rootVarsJson};
 var DARK_VARS = ${darkVarsJson};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 0. TAILWIND ANIMATION CLASS RECOVERY (runs immediately on load)
+// Cleans up any residual opacity-0 / translate-y-* / blur-[*] classes that
+// the scraper's page.evaluate() phase may have missed (e.g. SSR HTML that
+// hadn't loaded styles yet, or elements inserted after freeze).
+// ════════════════════════════════════════════════════════════════════════════
+
+(function() {
+  var STRIP = ['opacity-0','invisible','scale-x-0','scale-y-0','scale-0'];
+  var PATS = [
+    /\\btranslate-y-\\d+\\b/g,
+    /\\b-translate-y-\\d+\\b/g,
+    /\\btranslate-x-\\d+\\b/g,
+    /\\b-translate-x-\\d+\\b/g,
+    /\\bblur-\\[[\\d.]+(?:px|rem)\\]\\b/g,
+    /\\bblur-(?:sm|md|lg|xl|2xl|3xl)\\b/g,
+    /\\bscale-\\[[0-9.]+\\]\\b/g,
+  ];
+  try {
+    var els = document.querySelectorAll(
+      '[class*="opacity-0"],[class*="scale-x-0"],[class*="scale-y-0"],' +
+      '[class*="translate-y-"],[class*="translate-x-"],[class*="blur-["],' +
+      '.hero-reveal'
+    );
+    els.forEach(function(el) {
+      var cls = typeof el.className === 'string' ? el.className : '';
+      if (!cls) return;
+      if (/\\b(?:group-hover|peer-hover|hover|focus)[:-]/.test(cls)) return;
+      try {
+        if (el.closest('[role="dialog"],[role="menu"],[role="tooltip"]')) return;
+        if (el.closest('[data-state="closed"],[data-radix-popper-content-wrapper]')) return;
+      } catch(e) {}
+      var cs = window.getComputedStyle(el);
+      if (cs.display === 'none') return;
+      var hasTrans = cs.transitionDuration && cs.transitionDuration !== '0s';
+      var isMarked = /\\bhero-reveal\\b/.test(cls) || /\\bdelay-\\d+\\b/.test(cls);
+      if (!hasTrans && !isMarked) return;
+      var newCls = cls;
+      STRIP.forEach(function(c) { el.classList.remove(c); });
+      PATS.forEach(function(p) { newCls = newCls.replace(p, ' '); p.lastIndex = 0; });
+      el.className = newCls.replace(/\\s+/g, ' ').trim();
+    });
+  } catch(e) {}
+})();
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1. SCROLL ANIMATION REPLAY

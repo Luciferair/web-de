@@ -229,6 +229,36 @@ if (typeof Splitting !== 'undefined') {
     ],
   },
 
+  dotlottie: {
+    name: "DotLottie Player",
+    localCdn: true,
+    js: [
+      `<script src="./assets/cdn/dotlottie-player.js"></script>`,
+    ],
+    downloadUrls: [
+      "https://cdn.jsdelivr.net/npm/@dotlottie/player-component@2.7.12/dist/dotlottie-player.js",
+    ],
+    initScript: `
+// DotLottie player web component re-initialization
+(function() {
+  if (typeof customElements === 'undefined') return;
+  // The web component auto-registers via the script above.
+  // Re-render any dotlottie-player elements that have a src attribute.
+  document.querySelectorAll('dotlottie-player[src]').forEach(function(el) {
+    try {
+      var src = el.getAttribute('src');
+      if (src) {
+        // Force re-render by toggling autoplay
+        el.setAttribute('autoplay', '');
+        el.setAttribute('loop', '');
+        if (typeof el.load === 'function') el.load(src);
+        else if (typeof el.play === 'function') { el.load && el.load(src); el.play(); }
+      }
+    } catch(e) {}
+  });
+})();`,
+  },
+
   typed: {
     name: "Typed.js",
     localCdn: true,
@@ -355,6 +385,7 @@ export interface DetectedFrameworks {
   scrollReveal: boolean;
   splitting: boolean;
   lottie: boolean;
+  dotlottie: boolean;
   typed: boolean;
   swiper: boolean;
   animeJs: boolean;
@@ -419,9 +450,14 @@ export function detectFrameworksFromHtml(
 
     lottie:
       $("lottie-player").length > 0 ||
-      $("dotlottie-player").length > 0 ||
       html.includes("lottie") ||
       html.includes("bodymovin"),
+
+    dotlottie:
+      $("dotlottie-player").length > 0 ||
+      html.includes("dotlottie") ||
+      html.includes("DotLottiePlayer") ||
+      html.includes(".lottie"),
 
     typed:
       $(".typed-cursor").length > 0 ||
@@ -495,6 +531,7 @@ export function collectCdnDownloadUrls(
     ["scrollReveal",      "scrollReveal"],
     ["splitting",         "splitting"],
     ["lottie",            "lottie"],
+    ["dotlottie",         "dotlottie"],
     ["typed",             "typed"],
     ["swiper",            "swiper"],
     ["animeJs",           "animeJs"],
@@ -540,6 +577,7 @@ export function injectCdnFrameworks(
     ["scrollReveal",      "scrollReveal"],
     ["splitting",         "splitting"],
     ["lottie",            "lottie"],
+    ["dotlottie",         "dotlottie"],
     ["typed",             "typed"],
     ["swiper",            "swiper"],
     ["animeJs",           "animeJs"],

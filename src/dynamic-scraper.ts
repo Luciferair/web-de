@@ -293,6 +293,88 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
     console.warn(`   ⚠️  Animation engine warning: ${err instanceof Error ? err.message : err}`);
   }
 
+  // ── Phase 5b: hero-dotted-video data-ready + Tailwind class stripping ───────
+  // Antimetal.com & similar sites: CSS :has(.hero-dotted-video[data-ready]) unlocks
+  // ALL hero-reveal elements. The video fires a JS event to set data-ready after
+  // it plays, but the scraper captures before this fires. Setting it now makes all
+  // hero-reveal elements transition to visible state BEFORE we capture the DOM.
+  console.log(`   💡 Injecting hero-dotted-video[data-ready] & stripping Tailwind anim classes...`);
+  try {
+    const fixResult = await page.evaluate(() => {
+      let fixes = 0;
+
+      // ── 1. Set data-ready on hero video containers (unlocks CSS :has() selector) ──
+      const heroDottedVideo = document.querySelector('.hero-dotted-video');
+      if (heroDottedVideo && !heroDottedVideo.hasAttribute('data-ready')) {
+        heroDottedVideo.setAttribute('data-ready', '');
+        fixes++;
+      }
+      // Generic: any element with a [data-ready] CSS trigger pattern
+      document.querySelectorAll('[class*="hero"][class*="video"],[class*="hero"][class*="canvas"]').forEach(el => {
+        if (!el.hasAttribute('data-ready')) { el.setAttribute('data-ready', ''); fixes++; }
+      });
+
+      // ── 2. Explicit Tailwind animation class strip (belt-and-suspenders after phase 5) ──
+      const STRIP_CLASSES = ['opacity-0', 'invisible', 'scale-x-0', 'scale-y-0', 'scale-0'];
+      const STRIP_PATTERNS = [
+        /\btranslate-y-\d+\b/g,
+        /\b-translate-y-\d+\b/g,
+        /\btranslate-x-\d+\b/g,
+        /\b-translate-x-\d+\b/g,
+        /\bblur-\[[\d.]+(?:px|rem)\]\b/g,
+        /\bblur-(?:sm|md|lg|xl|2xl|3xl)\b/g,
+        /\bscale-\[[0-9.]+\]\b/g,
+      ];
+
+      try {
+        document.querySelectorAll(
+          '[class*="opacity-0"],[class*="scale-x-0"],[class*="scale-y-0"],' +
+          '[class*="translate-y-"],[class*="translate-x-"],[class*="blur-["],' +
+          '.hero-reveal'
+        ).forEach(el => {
+          const cls = typeof el.className === 'string' ? el.className : '';
+          if (!cls) return;
+
+          // Skip hover/group-hover/focus utilities
+          if (/\b(?:group-hover|peer-hover|hover|focus)[:-]/.test(cls)) return;
+
+          // Skip popover, menu, tooltip, closed state containers
+          try {
+            if (el.closest('[role="dialog"],[role="menu"],[role="tooltip"],[role="listbox"]')) return;
+            if (el.closest('[data-state="closed"],[data-headlessui-state]')) return;
+            if (el.closest('[data-radix-popper-content-wrapper]')) return;
+          } catch { /* */ }
+
+          const cs = window.getComputedStyle(el);
+          if (cs.display === 'none') return;
+
+          const hasTrans = cs.transitionDuration && cs.transitionDuration !== '0s';
+          const isMarked = /\bhero-reveal\b/.test(cls) || /\bdelay-\d+\b/.test(cls);
+          if (!hasTrans && !isMarked) return;
+
+          let newCls = cls;
+          let changed = false;
+          STRIP_CLASSES.forEach(c => {
+            if (el.classList.contains(c)) { el.classList.remove(c); changed = true; }
+          });
+          STRIP_PATTERNS.forEach(p => {
+            if (p.test(newCls)) { newCls = newCls.replace(p, ' '); changed = true; }
+            p.lastIndex = 0;
+          });
+          if (changed) { el.className = newCls.replace(/\s+/g, ' ').trim(); fixes++; }
+        });
+      } catch { /* */ }
+
+      return fixes;
+    });
+    console.log(`   ✅ Phase 5b: ${fixResult} element(s) fixed (data-ready + Tailwind class strip)`);
+  } catch (err) {
+    console.warn(`   ⚠️  Phase 5b warning: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Give hero-reveal CSS transitions time to settle after data-ready is set
+  await sleep(600);
+
   // ── Phase 6: Harvest CSS variables from live DOM ──────────────────────────
   console.log(`   🎨 Harvesting CSS variables from live DOM (dark + light pass)...`);
   let cssVarHarvest: CssVarHarvest | undefined;
@@ -368,6 +450,20 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
 
   // ── Parse rendered HTML ────────────────────────────────────────────────────
   const $ = cheerio.load(renderedHtml);
+
+  // ── DOM fixups: hero-no-autoplay + data-ready for CSS :has() unlock ─────────
+  // Add hero-no-autoplay to <html> — this is a built-in CSS fallback that
+  // antimetal.com (and similar sites) provides to force-show all hero-reveal
+  // elements with !important overrides, bypassing the :has() trigger entirely.
+  $('html').addClass('hero-no-autoplay');
+
+  // Also set data-ready on any hero-dotted-video element in the captured DOM
+  // (belt-and-suspenders: the phase 5b browser evaluate may have done this too)
+  $('.hero-dotted-video').attr('data-ready', '');
+  // Generic hero-canvas/video containers
+  $('[class*="hero"][class*="video"],[class*="hero"][class*="canvas"]').attr('data-ready', '');
+
+  console.log(`   ✅ Added hero-no-autoplay to <html>, data-ready to hero containers`);
 
   const baseDomain = new URL(actualPageUrl).hostname;
   const assetMap = new Map<string, string>();

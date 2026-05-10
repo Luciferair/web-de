@@ -1,0 +1,49 @@
+# Antimetal
+
+> The AI platform that handles everything that happens after you deploy — so your engineers can focus on building.
+
+Antimetal is the intelligence layer for engineering teams to better manage their software systems and infrastructure by investigating, diagnosing, fixing, and preventing issues in production. Built for platform engineering, DevOps, and on-call teams, Antimetal connects your cloud platforms, observability tools, and code to automate incident response, reduce MTTR, and eliminate alert fatigue. Teams using Antimetal resolve production incidents faster, reduce recurring failures, and ship with greater reliability. SOC 2, GDPR, and HIPAA compliant.
+
+## Product
+
+- [Diagnose](https://antimetal.com/diagnose): Get the full picture for every production incident instantly. Antimetal performs automated root cause analysis by correlating alerts, logs, metrics, code changes, and past incidents across your observability stack — so your on-call team understands what broke and why in minutes, not hours.
+- [Fix](https://antimetal.com/fix): Stop firefighting. Get production-ready fixes generated with full context of your system — your stack, your history, your code. Antimetal replaces manual runbooks with AI-generated remediation tailored to your environment.
+- [Prevent](https://antimetal.com/prevent): Stop incidents before they happen. Antimetal proactively identifies hidden risks, performance bottlenecks, and recurring failure patterns in your infrastructure — so you can fix them before they become production incidents.
+- [Get Answers](https://antimetal.com/get-answers): Ask any question about your systems and get accurate answers instantly — no dashboards, no docs, no hunting down the one engineer who knows. Built for platform and site reliability teams managing complex distributed systems.
+
+## Getting Started
+
+- [Book a Demo](https://antimetal.com/demo): See Antimetal in action with a live demo tailored to your stack.
+- [Pricing](https://antimetal.com/pricing): Custom pricing based on your team size, tech stack, and infrastructure needs.
+- [Find Time](https://antimetal.com/find-time): Schedule a call with the Antimetal team.
+
+## Resources
+
+- [Docs](https://docs.antimetal.com): Official Antimetal documentation — integration guides, API reference, and platform setup.
+- [Blog](https://antimetal.com/resources/blog): Engineering blog covering AI infrastructure, incident response, and the future of DevOps.
+- [Changelog](https://antimetal.com/resources/changelog): Latest product updates and new features.
+- [Customer Stories](https://antimetal.com/resources/customers): How engineering teams use Antimetal to reduce incidents and move faster.
+
+## Blog Posts
+
+- [Introducing Antimetal for Coding Agents](https://antimetal.com/resources/blog/introducing-antimetal-for-coding-agents): A single MCP for the runtime context your coding agent is missing.
+- [Building a Unified Model of Software Systems](https://antimetal.com/resources/blog/building-a-unified-model-of-software-systems): A concrete approach to representing software systems for machine reasoning.
+- [The Future of Infrastructure is Invisible](https://antimetal.com/resources/blog/the-future-of-infrastructure-is-invisible): Writing code is no longer the hard part. It's everything that happens after.
+
+## Guides
+
+- [What is AI for Incident Response?](https://antimetal.com/explore/ai-for-incident-response): AI for incident response refers to the use of AI systems to investigate, diagnose, and resolve production incidents by reasoning across logs, metrics, alerts, code, and system changes.
+- [What is Antimetal?](https://antimetal.com/explore/what-is-antimetal): Antimetal is an AI system that helps engineering teams understand, diagnose, and improve production systems by reasoning across logs, metrics, alerts, code, and past incidents.
+
+## Legal
+
+- [Terms of Service](https://antimetal.com/terms): Terms of service
+- [Privacy Policy](https://antimetal.com/privacy): Privacy policy
+
+## Connect
+
+- [X (Twitter)](https://x.com/antimetal)
+- [LinkedIn](https://www.linkedin.com/company/antimetal)
+- [GitHub](https://github.com/antimetal)
+- [Careers](https://jobs.ashbyhq.com/antimetal)
+
