@@ -1,0 +1,17 @@
+{
+  "name": "scraper",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "mime-types": "^3.0.2",
+    "puppeteer-core": "^24.40.0"
+  }
+}
