@@ -522,6 +522,21 @@ if (themeBtn) {
   }, true);
 }
 
+// ── Wire aria-label="Switch to light/dark/system theme" buttons ──────────
+document.querySelectorAll('button[aria-label]').forEach(function(btn) {
+  var label = (btn.getAttribute('aria-label') || '').toLowerCase();
+  if (label.includes('switch to light')) {
+    btn.addEventListener('click', function(e) { e.stopPropagation(); setTheme(false); }, true);
+  } else if (label.includes('switch to dark')) {
+    btn.addEventListener('click', function(e) { e.stopPropagation(); setTheme(true); }, true);
+  } else if (label.includes('switch to system')) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      setTheme(window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }, true);
+  }
+});
+
 // ════════════════════════════════════════════════════════════════════════════
 // 3. MOUSE / CURSOR TRACKING
 // ════════════════════════════════════════════════════════════════════════════

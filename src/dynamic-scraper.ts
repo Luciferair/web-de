@@ -1017,7 +1017,6 @@ function injectDotMatrixRenderer(
   assetMap: Map<string, string>,
   pageUrl: string
 ): void {
-  // Find the hero video local path
   let heroVideoPath: string | null = null;
   for (const [url, localPath] of assetMap.entries()) {
     if (url.includes('/assets/home/hero/video.mp4') || url.includes('hero/video.mp4')) {
@@ -1027,73 +1026,98 @@ function injectDotMatrixRenderer(
   }
   if (!heroVideoPath) return;
 
-  // Make path relative to index.html (which is at root of outputDir)
   const videoSrc = heroVideoPath.replace(/\\/g, '/');
-
   const containers = $('[class*="hero-dotted-video"]');
   if (!containers.length) return;
 
   containers.each((_, el) => {
-    const $el = $(el);
-    // Inject canvas inside the container
-    $el.html(`<canvas style="width:100%;height:100%;display:block;opacity:0.85"></canvas>`);
+    $(el).html(`<canvas style="width:100%;height:100%;display:block"></canvas>`);
   });
 
-  // Inject the dot-matrix renderer script once
   $('body').append(`<script data-dot-matrix="true">
 (function() {
   'use strict';
-  var DOT_SIZE = 3;
-  var GAP = 2;
-  var STEP = DOT_SIZE + GAP;
+  var DOT = 3, GAP = 2, STEP = DOT + GAP;
+  // Golden/amber tint color matching --color-hero in dark mode
+  var TINT_R = 224, TINT_G = 180, TINT_B = 100;
+  // Mouse glow effect
+  var mouseX = -9999, mouseY = -9999;
+  var GLOW_RADIUS = 120;   // radius of the spotlight
+  var REPEL_RADIUS = 40;   // inner zone: dots pushed away
+  var REPEL_STRENGTH = 14; // push distance in px
 
-  function initDotMatrix(container, videoSrc) {
+  function initDotMatrix(container, src) {
     var canvas = container.querySelector('canvas');
     if (!canvas) return;
     var ctx = canvas.getContext('2d');
-    var offscreen = document.createElement('canvas');
-    var offCtx = offscreen.getContext('2d');
+    var off = document.createElement('canvas');
+    var offCtx = off.getContext('2d');
 
     var video = document.createElement('video');
-    video.src = videoSrc;
-    video.muted = true;
-    video.loop = true;
-    video.playsInline = true;
-    video.crossOrigin = 'anonymous';
-    video.preload = 'auto';
+    video.src = src;
+    video.muted = true; video.loop = true;
+    video.playsInline = true; video.preload = 'auto';
 
     function resize() {
-      var rect = container.getBoundingClientRect();
-      var w = rect.width || container.offsetWidth || 1440;
-      var h = rect.height || container.offsetHeight || 640;
-      canvas.width = w;
-      canvas.height = h;
-      offscreen.width = Math.ceil(w / STEP);
-      offscreen.height = Math.ceil(h / STEP);
+      var w = container.offsetWidth || 1440;
+      var h = container.offsetHeight || 640;
+      canvas.width = w; canvas.height = h;
+      off.width = Math.ceil(w / STEP);
+      off.height = Math.ceil(h / STEP);
     }
 
     function drawFrame() {
       if (video.readyState < 2) return;
       var cw = canvas.width, ch = canvas.height;
-      var ow = offscreen.width, oh = offscreen.height;
-
-      // Draw video scaled to offscreen (low-res sample)
+      var ow = off.width, oh = off.height;
       offCtx.drawImage(video, 0, 0, ow, oh);
       var data = offCtx.getImageData(0, 0, ow, oh).data;
-
       ctx.clearRect(0, 0, cw, ch);
+
+      // Convert mouse to canvas coords
+      var rect = canvas.getBoundingClientRect();
+      var mx = mouseX - rect.left, my = mouseY - rect.top;
 
       for (var y = 0; y < oh; y++) {
         for (var x = 0; x < ow; x++) {
           var i = (y * ow + x) * 4;
-          var r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
-          if (a < 10) continue;
-          var brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
-          if (brightness < 0.05) continue;
-          ctx.globalAlpha = (a / 255) * brightness;
+          var brightness = (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114) / 255;
+          if (brightness < 0.04 || data[i+3] < 10) continue;
+
+          // Base dot position
+          var dx = x * STEP + DOT / 2;
+          var dy = y * STEP + DOT / 2;
+
+          // Mouse interaction
+          var ddx = dx - mx, ddy = dy - my;
+          var dist = Math.sqrt(ddx * ddx + ddy * ddy);
+
+          // Glow multiplier: spotlight that brightens dots near cursor
+          var glowMult = 1;
+          if (dist < GLOW_RADIUS) {
+            glowMult = 1 + 2.5 * Math.pow(1 - dist / GLOW_RADIUS, 2);
+          }
+
+          // Inner repulsion: push dots away from cursor center
+          if (dist < REPEL_RADIUS && dist > 0) {
+            var force = (1 - dist / REPEL_RADIUS) * REPEL_STRENGTH;
+            dx += (ddx / dist) * force;
+            dy += (ddy / dist) * force;
+          }
+
+          // Tint: blend grayscale brightness with golden color, boosted by glow
+          var b2 = Math.min(brightness * glowMult, 1);
+          var r = Math.round(TINT_R * b2);
+          var g = Math.round(TINT_G * b2);
+          var b = Math.round(TINT_B * b2);
+
+          // Dot radius grows slightly in glow zone
+          var radius = (DOT / 2) * (dist < GLOW_RADIUS ? (0.8 + 0.4 * (1 - dist / GLOW_RADIUS)) : 0.8);
+
+          ctx.globalAlpha = Math.min(b2 * 0.95, 1);
           ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
           ctx.beginPath();
-          ctx.arc(x * STEP + DOT_SIZE/2, y * STEP + DOT_SIZE/2, DOT_SIZE/2, 0, Math.PI * 2);
+          ctx.arc(dx, dy, radius, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -1102,21 +1126,14 @@ function injectDotMatrixRenderer(
 
     resize();
     window.addEventListener('resize', resize);
+    window.addEventListener('mousemove', function(e) { mouseX = e.clientX; mouseY = e.clientY; });
+    window.addEventListener('mouseleave', function() { mouseX = -9999; mouseY = -9999; });
 
-    video.addEventListener('canplay', function() {
-      video.play().catch(function(){});
-    });
-
-    var raf;
-    function loop() {
+    video.addEventListener('canplay', function() { video.play().catch(function(){}); });
+    video.addEventListener('playing', function loop() {
       drawFrame();
-      raf = requestAnimationFrame(loop);
-    }
-
-    video.addEventListener('playing', function() {
-      loop();
+      requestAnimationFrame(loop);
     });
-
     video.load();
   }
 
@@ -1126,5 +1143,5 @@ function injectDotMatrixRenderer(
 })();
 </script>`);
 
-  console.log(`   🎬 Injected dot-matrix video renderer (${videoSrc})`);
+  console.log(`   🎬 Injected dot-matrix renderer with golden tint + mouse repulsion`);
 }
