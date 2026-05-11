@@ -440,6 +440,37 @@ window.dataLayer = window.dataLayer || [];
 window.intercomSettings = window.intercomSettings || {};
 // Prevent Webpack chunk loading errors from crashing page
 window.webpackChunkName = window.webpackChunkName || {};
+
+// ── Auto-set data-ready on hero-dotted-video as soon as it appears ────────────
+// The nav component calls waitUntilDottedVideoReady() which resolves when
+// .hero-dotted-video[data-ready="true"] exists. We observe the DOM and set it
+// immediately so the nav renders without waiting for the video to play.
+(function() {
+  function markReady(el) {
+    if (el.getAttribute('data-ready') !== 'true') {
+      el.setAttribute('data-ready', 'true');
+      el.dispatchEvent(new Event('ready', { bubbles: true }));
+    }
+  }
+  var observer = new MutationObserver(function(mutations) {
+    for (var m of mutations) {
+      for (var node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.classList && node.classList.contains('hero-dotted-video')) {
+          markReady(node);
+        }
+        var found = node.querySelectorAll && node.querySelectorAll('.hero-dotted-video');
+        if (found) found.forEach(markReady);
+      }
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  // Also mark any already-existing elements
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.hero-dotted-video').forEach(markReady);
+    observer.disconnect();
+  });
+})();
 `;
 
 /**

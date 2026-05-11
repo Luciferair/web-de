@@ -97,7 +97,49 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   // Inject analytics stubbing + fetch/XHR intercept for 3D asset capture
   await page.evaluateOnNewDocument(PAGE_INIT_SCRIPT + "\n" + THREE_NETWORK_INTERCEPT_SCRIPT);
 
-  // ── Inject cookies ─────────────────────────────────────────────────────────
+  // ── JS request interception: patch waitUntilDottedVideoReady ─────────────
+  // The nav component calls waitUntilDottedVideoReady().then(setVisible(true)).
+  // In headless mode the hero video never plays so this Promise never resolves.
+  // We intercept the JS bundle and replace the function with one that resolves immediately.
+  await page.setRequestInterception(true);
+  page.on('request', async (req) => {
+    const url = req.url();
+    const rt = req.resourceType();
+    // Track all assets
+    if (["stylesheet", "script", "image", "font", "media", "other", "fetch", "xhr"].includes(rt) ||
+        BINARY_EXTENSIONS_PATTERN.test(url)) {
+      interceptedAssets.add(url);
+    }
+    // Patch JS bundles containing waitUntilDottedVideoReady
+    if (rt === 'script' && url.includes('/_next/')) {
+      try {
+        const res = await fetch(url, { headers: { 'User-Agent': (await import('./config.js')).USER_AGENT } });
+        if (res.ok) {
+          let body = await res.text();
+          if (body.includes('waitUntilDottedVideoReady')) {
+            // Replace the function export with one that resolves immediately
+            body = body.replace(
+              /waitUntilDottedVideoReady\s*[=:]\s*(?:async\s*)?\(\s*\)\s*=>[^,}]*/g,
+              'waitUntilDottedVideoReady=()=>Promise.resolve()'
+            );
+            // Also patch useState(!1) -> useState(!0) for the nav visibility gate
+            body = body.replace(
+              /\[B,H\]=\(0,s\.useState\)\(!1\)/g,
+              '[B,H]=(0,s.useState)(!0)'
+            );
+            await req.respond({
+              status: 200,
+              contentType: 'application/javascript',
+              body,
+            });
+            console.log(`   🔧 Patched waitUntilDottedVideoReady in live JS bundle`);
+            return;
+          }
+        }
+      } catch { /* fall through to normal request */ }
+    }
+    req.continue();
+  });
   if (cookiesFile) {
     console.log(`🍪 Loading cookies from: ${cookiesFile}`);
     const raw = fs.readFileSync(cookiesFile, "utf-8");
@@ -127,19 +169,8 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   }
 
   // ── Intercept ALL network requests ────────────────────────────────────────
+  // (handled by the request interception listener above — interceptedAssets is populated there)
   const interceptedAssets = new Set<string>();
-  page.on("request", (req) => {
-    const url = req.url();
-    const rt = req.resourceType();
-    // Standard web assets
-    if (["stylesheet", "script", "image", "font", "media", "other"].includes(rt)) {
-      interceptedAssets.add(url);
-    }
-    // 3D binary assets (via fetch/xhr resource types)
-    if (rt === "fetch" || rt === "xhr" || BINARY_EXTENSIONS_PATTERN.test(url)) {
-      interceptedAssets.add(url);
-    }
-  });
 
   // ── Navigate to target page ────────────────────────────────────────────────
   console.log(`\n🌐 Navigating to: ${pageUrl}`);
@@ -314,6 +345,31 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
         if (!el.hasAttribute('data-ready')) { el.setAttribute('data-ready', ''); fixes++; }
       });
 
+      // ── Fire the "dotted video ready" custom event that React nav listens for ──
+      // antimetal.com nav has: useState(false) gated on a custom event from the
+      // hero video component. Firing it here causes React to re-render the nav.
+      const readyEvents = ['dottedVideoReady', 'heroVideoReady', 'heroReady', 'videoReady'];
+      readyEvents.forEach(name => {
+        window.dispatchEvent(new CustomEvent(name, { bubbles: true }));
+        document.dispatchEvent(new CustomEvent(name, { bubbles: true }));
+      });
+
+      // ── Patch waitUntilDottedVideoReady to resolve immediately ────────────────
+      // The nav component calls waitUntilDottedVideoReady().then(()=>setVisible(true))
+      // Patching it to return a resolved promise makes the nav render immediately.
+      try {
+        // Find the module that exports waitUntilDottedVideoReady and patch it
+        const turbopack = (window as any).TURBOPACK_CHUNK_LISTS || (window as any).__turbopack_modules__;
+        // Brute-force: patch on the module namespace objects
+        for (const key of Object.keys(window as any)) {
+          const val = (window as any)[key];
+          if (val && typeof val === 'object' && typeof val.waitUntilDottedVideoReady === 'function') {
+            val.waitUntilDottedVideoReady = () => Promise.resolve();
+            fixes++;
+          }
+        }
+      } catch { /* */ }
+
       // ── 2. Explicit Tailwind animation class strip (belt-and-suspenders after phase 5) ──
       const STRIP_CLASSES = ['opacity-0', 'invisible', 'scale-x-0', 'scale-y-0', 'scale-0'];
       const STRIP_PATTERNS = [
@@ -372,8 +428,8 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
     console.warn(`   ⚠️  Phase 5b warning: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Give hero-reveal CSS transitions time to settle after data-ready is set
-  await sleep(600);
+  // Wait for React to re-render nav after the custom events fire
+  await sleep(1500);
 
   // ── Phase 6: Harvest CSS variables from live DOM ──────────────────────────
   console.log(`   🎨 Harvesting CSS variables from live DOM (dark + light pass)...`);
@@ -441,6 +497,30 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(300);
 
+  // ── Wait for nav/header to hydrate (Next.js App Router client components) ──
+  // The nav is a React client component that hydrates after RSC streaming.
+  // We wait up to 8s for any nav/header element to appear in the DOM.
+  console.log(`   ⏳ Waiting for nav/header to hydrate...`);
+  try {
+    await page.waitForFunction(
+      () => {
+        const nav = document.querySelector('nav, header, [role="navigation"], [role="banner"]');
+        return nav !== null && (nav as HTMLElement).offsetHeight > 0;
+      },
+      { timeout: 15000 }
+    );
+    console.log(`   ✅ Nav/header detected`);
+  } catch {
+    // Force hydration by dispatching events that trigger React re-renders
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('resize'));
+      window.dispatchEvent(new Event('load'));
+      document.dispatchEvent(new Event('DOMContentLoaded'));
+    });
+    await sleep(2000);
+    console.warn(`   ⚠️  Nav/header not found within timeout — capturing anyway`);
+  }
+
   // ── Capture final rendered HTML ────────────────────────────────────────────
   const renderedHtml = await page.content();
   const actualPageUrl = page.url();
@@ -458,12 +538,28 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   $('html').addClass('hero-no-autoplay');
 
   // Also set data-ready on any hero-dotted-video element in the captured DOM
-  // (belt-and-suspenders: the phase 5b browser evaluate may have done this too)
   $('.hero-dotted-video').attr('data-ready', '');
-  // Generic hero-canvas/video containers
   $('[class*="hero"][class*="video"],[class*="hero"][class*="canvas"]').attr('data-ready', '');
 
-  console.log(`   ✅ Added hero-no-autoplay to <html>, data-ready to hero containers`);
+  // ── Directly strip animation entry classes from hero-reveal elements ──────
+  // hero-no-autoplay relies on the site's CSS being loaded. As a hard fallback,
+  // directly remove the Tailwind entry-state classes from every hero-reveal element.
+  const HERO_STRIP = ['scale-x-0', 'scale-y-0', 'scale-0', 'opacity-0', 'invisible'];
+  const HERO_STRIP_RE = [
+    /\btranslate-y-\d+\b/g,
+    /\b-translate-y-\d+\b/g,
+    /\btranslate-x-\d+\b/g,
+    /\b-translate-x-\d+\b/g,
+    /\bblur-\[[\d.]+(?:px|rem)\]\b/g,
+  ];
+  $('[class*="hero-reveal"]').each((_, el) => {
+    let cls = $(el).attr('class') ?? '';
+    HERO_STRIP.forEach(c => { cls = cls.replace(new RegExp(`\\b${c}\\b`, 'g'), ''); });
+    HERO_STRIP_RE.forEach(re => { cls = cls.replace(re, ' '); re.lastIndex = 0; });
+    $(el).attr('class', cls.replace(/\s+/g, ' ').trim());
+  });
+
+  console.log(`   ✅ Added hero-no-autoplay, stripped hero-reveal entry classes`);
 
   const baseDomain = new URL(actualPageUrl).hostname;
   const assetMap = new Map<string, string>();
@@ -634,6 +730,63 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   // ── Post-process HTML: rewrite asset URLs ─────────────────────────────────
   postProcessHtml($, pageUrl, assetMap, "index.html", cssTexts);
 
+  // ── Next.js offline hydration fix ────────────────────────────────────────
+  // The turbopack/webpack runtime hardcodes "/_next/" as the public path.
+  // When served offline, dynamic chunk imports go to /_next/... (absolute from
+  // origin) instead of the local copy at <baseDomain>/_next/...
+  // Fix: patch the turbopack JS file + rewrite RSC __next_f payload paths.
+  const nextBaseDomain = new URL(pageUrl).hostname; // e.g. "antimetal.com"
+  const nextLocalBase = `${nextBaseDomain}/_next/`; // e.g. "antimetal.com/_next/"
+
+  // 1. Patch turbopack runtime JS file
+  const turbopackChunkDir = path.join(outputDir, nextBaseDomain, "_next", "static", "chunks");
+  if (fs.existsSync(turbopackChunkDir)) {
+    const turboFiles = fs.readdirSync(turbopackChunkDir).filter(f => f.startsWith("turbopack") && f.endsWith(".js"));
+    for (const tf of turboFiles) {
+      const tfPath = path.join(turbopackChunkDir, tf);
+      let src = fs.readFileSync(tfPath, "utf-8");
+      // Replace the hardcoded "/_next/" base path with the local relative path
+      if (src.includes('"/_next/"')) {
+        src = src.replace(/"\/\_next\/"/g, `"${nextLocalBase}"`);
+        fs.writeFileSync(tfPath, src, "utf-8");
+        console.log(`   🔧 Patched turbopack base path in ${tf}`);
+      }
+    }
+  }
+
+  // 2. Rewrite /_next/ paths in RSC __next_f script tags
+  $('script').each((_, el) => {
+    const content = $(el).html() ?? "";
+    if (content.includes("__next_f") && content.includes("/_next/")) {
+      $(el).html(content.replace(/\/_next\//g, nextLocalBase));
+    }
+  });
+
+  // 3. Patch nav/header components that gate rendering on a hero-video "ready" event.
+  // Also create short-name symlinks: turbopack uses "abc123.js" but files are "abc123-hash.js".
+  if (fs.existsSync(turbopackChunkDir)) {
+    for (const cf of fs.readdirSync(turbopackChunkDir)) {
+      const cfPath = path.join(turbopackChunkDir, cf);
+      if (cf.endsWith(".js")) {
+        let src = fs.readFileSync(cfPath, "utf-8");
+        if (src.includes("waitUntilDottedVideoReady") && src.includes("[B,H]=(0,s.useState)(!1)")) {
+          src = src.replace("[B,H]=(0,s.useState)(!1)", "[B,H]=(0,s.useState)(!0)");
+          fs.writeFileSync(cfPath, src, "utf-8");
+          console.log(`   🔧 Patched nav visibility gate in ${cf}`);
+        }
+      }
+      // Short-name symlink: "abc123-hash.js" -> also accessible as "abc123.js"
+      const m = cf.match(/^([a-f0-9]+)-[a-f0-9]+(\.js|\.css)$/);
+      if (m?.[1] && m?.[2]) {
+        const shortPath = path.join(turbopackChunkDir, m[1] + m[2]);
+        if (!fs.existsSync(shortPath)) {
+          try { fs.symlinkSync(cf, shortPath); } catch { /* ignore */ }
+        }
+      }
+    }
+    console.log(`   🔗 Created short-name symlinks for hashed chunks`);
+  }
+
   // ── Inject CDN framework scripts (local copies) ───────────────────────────
   injectCdnFrameworks($, detectedFrameworks);
 
@@ -652,6 +805,9 @@ export async function scrapeDynamic(options: DynamicScrapeOptions): Promise<void
   // ── Inject offline interactivity enhancement ──────────────────────────────
   injectStaticEnhancement($, cssTexts, cssVarHarvest);
   console.log(`🎯 Injected offline enhancement script`);
+
+  // ── Inject dot-matrix video renderer for hero-dotted-video ───────────────
+  injectDotMatrixRenderer($, assetMap, pageUrl);
 
   // ── Save index.html ───────────────────────────────────────────────────────
   const finalHtml = $.html();
@@ -850,4 +1006,125 @@ async function captureLottieAnimations(page: Page): Promise<void> {
       });
     } catch { /* */ }
   });
+}
+
+// ── Helper: Inject dot-matrix video renderer ─────────────────────────────────
+// Finds all elements with class "hero-dotted-video" (or similar dot-video containers)
+// and injects a canvas + JS that replays the downloaded MP4 as a dot-matrix effect.
+
+function injectDotMatrixRenderer(
+  $: ReturnType<typeof import("cheerio").load>,
+  assetMap: Map<string, string>,
+  pageUrl: string
+): void {
+  // Find the hero video local path
+  let heroVideoPath: string | null = null;
+  for (const [url, localPath] of assetMap.entries()) {
+    if (url.includes('/assets/home/hero/video.mp4') || url.includes('hero/video.mp4')) {
+      heroVideoPath = localPath;
+      break;
+    }
+  }
+  if (!heroVideoPath) return;
+
+  // Make path relative to index.html (which is at root of outputDir)
+  const videoSrc = heroVideoPath.replace(/\\/g, '/');
+
+  const containers = $('[class*="hero-dotted-video"]');
+  if (!containers.length) return;
+
+  containers.each((_, el) => {
+    const $el = $(el);
+    // Inject canvas inside the container
+    $el.html(`<canvas style="width:100%;height:100%;display:block;opacity:0.85"></canvas>`);
+  });
+
+  // Inject the dot-matrix renderer script once
+  $('body').append(`<script data-dot-matrix="true">
+(function() {
+  'use strict';
+  var DOT_SIZE = 3;
+  var GAP = 2;
+  var STEP = DOT_SIZE + GAP;
+
+  function initDotMatrix(container, videoSrc) {
+    var canvas = container.querySelector('canvas');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var offscreen = document.createElement('canvas');
+    var offCtx = offscreen.getContext('2d');
+
+    var video = document.createElement('video');
+    video.src = videoSrc;
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.preload = 'auto';
+
+    function resize() {
+      var rect = container.getBoundingClientRect();
+      var w = rect.width || container.offsetWidth || 1440;
+      var h = rect.height || container.offsetHeight || 640;
+      canvas.width = w;
+      canvas.height = h;
+      offscreen.width = Math.ceil(w / STEP);
+      offscreen.height = Math.ceil(h / STEP);
+    }
+
+    function drawFrame() {
+      if (video.readyState < 2) return;
+      var cw = canvas.width, ch = canvas.height;
+      var ow = offscreen.width, oh = offscreen.height;
+
+      // Draw video scaled to offscreen (low-res sample)
+      offCtx.drawImage(video, 0, 0, ow, oh);
+      var data = offCtx.getImageData(0, 0, ow, oh).data;
+
+      ctx.clearRect(0, 0, cw, ch);
+
+      for (var y = 0; y < oh; y++) {
+        for (var x = 0; x < ow; x++) {
+          var i = (y * ow + x) * 4;
+          var r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+          if (a < 10) continue;
+          var brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+          if (brightness < 0.05) continue;
+          ctx.globalAlpha = (a / 255) * brightness;
+          ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+          ctx.beginPath();
+          ctx.arc(x * STEP + DOT_SIZE/2, y * STEP + DOT_SIZE/2, DOT_SIZE/2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    resize();
+    window.addEventListener('resize', resize);
+
+    video.addEventListener('canplay', function() {
+      video.play().catch(function(){});
+    });
+
+    var raf;
+    function loop() {
+      drawFrame();
+      raf = requestAnimationFrame(loop);
+    }
+
+    video.addEventListener('playing', function() {
+      loop();
+    });
+
+    video.load();
+  }
+
+  document.querySelectorAll('[class*="hero-dotted-video"]').forEach(function(el) {
+    initDotMatrix(el, '${videoSrc}');
+  });
+})();
+</script>`);
+
+  console.log(`   🎬 Injected dot-matrix video renderer (${videoSrc})`);
 }
